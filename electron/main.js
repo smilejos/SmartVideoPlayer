@@ -176,6 +176,91 @@ ipcMain.handle('open-file', async () => {
     return null;
 });
 
+ipcMain.handle('open-folder', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ['openDirectory']
+    });
+
+    if (!canceled && filePaths.length > 0) {
+        const folderPath = filePaths[0];
+        try {
+            const files = fs.readdirSync(folderPath);
+            const videoExtensions = ['.mp4', '.mkv', '.avi', '.webm', '.mov'];
+            const videoFiles = files
+                .filter(file => videoExtensions.includes(path.extname(file).toLowerCase()))
+                .map(file => path.join(folderPath, file));
+            return videoFiles;
+        } catch (err) {
+            console.error('Error reading directory:', err);
+            return [];
+        }
+    }
+    return [];
+});
+
+ipcMain.handle('get-video-metadata', async (event, filePath) => {
+    return new Promise((resolve) => {
+        try {
+            // Get file size
+            const stat = fs.statSync(filePath);
+            const size = stat.size;
+
+            // Get metadata and thumbnail
+            ffmpeg.ffprobe(filePath, (err, metadata) => {
+                if (err) {
+                    console.error('FFprobe error:', err);
+                    resolve({ duration: 0, size, thumbnail: null });
+                    return;
+                }
+
+                const duration = metadata.format.duration || 0;
+
+                // Generate thumbnail
+                // We'll capture a frame at 10% or 5 seconds, whichever is smaller/valid, or just 1s
+                const screenshotsFolder = path.join(app.getPath('userData'), 'thumbnails');
+                if (!fs.existsSync(screenshotsFolder)) {
+                    fs.mkdirSync(screenshotsFolder, { recursive: true });
+                }
+
+                const filename = `thumb_${path.basename(filePath)}_${Date.now()}.png`;
+                const thumbnailPath = path.join(screenshotsFolder, filename);
+
+                ffmpeg(filePath)
+                    .on('end', () => {
+                        // Read the file and convert to base64
+                        try {
+                            const imageBuffer = fs.readFileSync(thumbnailPath);
+                            const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
+                            // Clean up temp file
+                            fs.unlink(thumbnailPath, (err) => {
+                                if (err) console.error("Error deleting temp thumbnail", err)
+                            });
+                            resolve({ duration, size, thumbnail: base64Image });
+                        } catch (e) {
+                            console.error('Error reading thumbnail:', e);
+                            resolve({ duration, size, thumbnail: null });
+                        }
+                    })
+                    .on('error', (err) => {
+                        console.error('Thumbnail generation error:', err);
+                        resolve({ duration, size, thumbnail: null });
+                    })
+                    .screenshots({
+                        count: 1,
+                        folder: screenshotsFolder,
+                        filename: filename,
+                        timemarks: ['5%'], // Capture at 5% of video
+                        size: '320x180'
+                    });
+            });
+        } catch (error) {
+            console.error('Error getting metadata:', error);
+            resolve({ duration: 0, size: 0, thumbnail: null });
+        }
+    });
+
+});
+
 ipcMain.handle('get-server-port', () => {
     return serverPort;
 });

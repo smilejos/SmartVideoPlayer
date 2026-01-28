@@ -4,6 +4,9 @@ import { CommonModule } from '@angular/common';
 interface PlaylistItem {
   name: string;
   path: string;
+  duration?: number;
+  size?: number;
+  thumbnail?: string;
 }
 
 @Component({
@@ -44,6 +47,9 @@ interface PlaylistItem {
             </button>
             <button class="icon-btn" (click)="openFile()" title="Add to Playlist">
                <span class="material-icons">add_to_photos</span>
+            </button>
+            <button class="icon-btn" (click)="openFolder()" title="Open Folder">
+               <span class="material-icons">create_new_folder</span>
             </button>
             <div class="time-display">
               {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
@@ -96,22 +102,39 @@ interface PlaylistItem {
       <div class="playlist-sidebar" [class.visible]="isPlaylistVisible">
          <div class="sidebar-header">
             <h3>Playlist</h3>
-            <button class="icon-btn" (click)="togglePlaylist()"><span class="material-icons">close</span></button>
+            <div class="header-actions">
+                <button class="icon-btn" (click)="clearPlaylist()" title="Clear Playlist"><span class="material-icons">delete_sweep</span></button>
+                <button class="icon-btn" (click)="togglePlaylist()"><span class="material-icons">close</span></button>
+            </div>
          </div>
          <div class="playlist-items">
             <div *ngFor="let item of playlist; let i = index" 
                  class="playlist-item" 
                  [class.active]="i === activeIndex"
                  (click)="playFromPlaylist(i)">
-               <span class="item-number">{{ i + 1 }}</span>
-               <span class="item-name">{{ item.name }}</span>
+               <div class="item-thumbnail">
+                  <img [src]="item.thumbnail" *ngIf="item.thumbnail" alt="thumb">
+                  <span class="material-icons placeholder-icon" *ngIf="!item.thumbnail">movie</span>
+               </div>
+               <div class="item-details">
+                   <div class="item-row">
+                       <span class="item-number">{{ i + 1 }}</span>
+                       <span class="item-name">{{ item.name }}</span>
+                   </div>
+                   <div class="item-meta">
+                       <span>{{ formatTime(item.duration || 0) }}</span>
+                       <span class="meta-dot">•</span>
+                       <span>{{ formatSize(item.size || 0) }}</span>
+                   </div>
+               </div>
                <span *ngIf="i === activeIndex" class="playing-indicator">
                   <span class="material-icons">play_circle_filled</span>
                </span>
             </div>
             <div *ngIf="playlist.length === 0" class="empty-state">
                <p>No videos added yet</p>
-               <button class="add-btn" (click)="openFile()">Add Videos</button>
+               <button class="add-btn" (click)="openFolder()">Open Folder</button>
+               <button class="add-btn secondary" (click)="openFile()">Add Files</button>
             </div>
          </div>
       </div>
@@ -356,6 +379,12 @@ interface PlaylistItem {
       border-bottom: 1px solid var(--glass-border);
     }
 
+    .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+
     .playlist-items {
       flex: 1;
       overflow-y: auto;
@@ -366,7 +395,7 @@ interface PlaylistItem {
     }
 
     .playlist-item {
-      padding: 12px 15px;
+      padding: 10px;
       border-radius: 12px;
       background: rgba(255,255,255,0.03);
       cursor: pointer;
@@ -386,14 +415,64 @@ interface PlaylistItem {
       border: 1px solid var(--accent-primary);
     }
 
+    .item-thumbnail {
+        width: 60px;
+        height: 40px;
+        background: #000;
+        border-radius: 6px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .item-thumbnail img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .placeholder-icon {
+        font-size: 20px;
+        color: var(--text-secondary);
+    }
+
+    .item-details {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        overflow: hidden;
+    }
+
+    .item-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .item-meta {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        margin-left: 20px; /* Align with name */
+    }
+
+    .meta-dot {
+        font-size: 0.5rem;
+        opacity: 0.5;
+    }
+
     .item-number {
       font-size: 0.8rem;
       color: var(--text-secondary);
-      min-width: 20px;
+      min-width: 15px;
     }
 
     .item-name {
-      flex: 1;
       font-size: 0.9rem;
       white-space: nowrap;
       overflow: hidden;
@@ -429,6 +508,15 @@ interface PlaylistItem {
 
     .add-btn:hover {
       background: var(--accent-secondary);
+    }
+
+    .add-btn.secondary {
+        background: transparent;
+        border: 1px solid var(--glass-border);
+    }
+
+    .add-btn.secondary:hover {
+        background: rgba(255,255,255,0.1);
     }
     
     .error-overlay {
@@ -561,7 +649,13 @@ export class PlayerComponent {
     const filePath = await (window as any).electronAPI.openFile();
     if (filePath) {
       const fileName = filePath.split(/[\\\\/]/).pop();
-      const newItem = { name: fileName || 'Unknown Video', path: filePath };
+      const metadata = await (window as any).electronAPI.getVideoMetadata(filePath);
+
+      const newItem: PlaylistItem = {
+        name: fileName || 'Unknown Video',
+        path: filePath,
+        ...metadata
+      };
 
       this.playlist.push(newItem);
 
@@ -570,6 +664,33 @@ export class PlayerComponent {
       }
 
       this.cdr.detectChanges();
+    }
+  }
+
+  async openFolder() {
+    const files: string[] = await (window as any).electronAPI.openFolder();
+    if (files && files.length > 0) {
+      // Add files immediately to show them in the list
+      const newItems = files.map(file => ({
+        name: file.split(/[\\\\/]/).pop() || 'Unknown',
+        path: file
+      }));
+
+      const startIndex = this.playlist.length;
+      this.playlist = [...this.playlist, ...newItems];
+
+      if (this.activeIndex === -1) {
+        this.playFromPlaylist(0);
+      }
+      this.cdr.detectChanges();
+
+      // Fetch metadata in background
+      for (let i = 0; i < newItems.length; i++) {
+        const globalIndex = startIndex + i;
+        const metadata = await (window as any).electronAPI.getVideoMetadata(newItems[i].path);
+        this.playlist[globalIndex] = { ...this.playlist[globalIndex], ...metadata };
+        this.cdr.detectChanges();
+      }
     }
   }
 
@@ -618,6 +739,17 @@ export class PlayerComponent {
   togglePlaylist() {
     this.isPlaylistVisible = !this.isPlaylistVisible;
     if (this.isPlaylistVisible) this.isSpeedMenuVisible = false;
+  }
+
+  clearPlaylist() {
+    this.playlist = [];
+    this.activeIndex = -1;
+    this.isPlaying = false;
+    this.videoElement.nativeElement.src = '';
+    this.currentTime = 0;
+    this.progress = 0;
+    this.duration = 0;
+    this.cdr.detectChanges();
   }
 
   toggleSpeedMenu() {
@@ -693,5 +825,13 @@ export class PlayerComponent {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  }
+
+  formatSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 }
