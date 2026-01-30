@@ -265,6 +265,54 @@ ipcMain.handle('get-server-port', () => {
     return serverPort;
 });
 
+ipcMain.handle('select-destination-folder', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ['openDirectory']
+    });
+    if (!canceled && filePaths.length > 0) {
+        return filePaths[0];
+    }
+    return null;
+});
+
+ipcMain.handle('copy-video-file', async (event, { filePath, destinationFolder, pathDepth }) => {
+    try {
+        if (!fs.existsSync(filePath)) {
+            return { success: false, message: 'Source file not found' };
+        }
+        if (!fs.existsSync(destinationFolder)) {
+            return { success: false, message: 'Destination folder not found' };
+        }
+
+        const sourceDir = path.dirname(filePath);
+        const fileName = path.basename(filePath);
+        // Split by separator. On Windows it might be different, but path.sep handles system specific.
+        // However, input paths might be mixed if coming from different sources, but usually consistent in Node.
+        // split(path.sep) usually works.
+        const pathSegments = sourceDir.split(path.sep);
+
+        // Remove empty strings resulting from root split (e.g. /var/... -> ['', 'var', ...])
+        const cleanSegments = pathSegments.filter(s => s.length > 0);
+
+        const effectiveDepth = Math.min(Math.max(0, pathDepth), cleanSegments.length);
+        const segmentsToKeep = cleanSegments.slice(cleanSegments.length - effectiveDepth);
+
+        const targetDir = path.join(destinationFolder, ...segmentsToKeep);
+        const targetPath = path.join(targetDir, fileName);
+
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+        }
+
+        fs.copyFileSync(filePath, targetPath);
+
+        return { success: true, message: `Copied to ${segmentsToKeep.join('/')}/${fileName}` };
+    } catch (err) {
+        console.error('Copy error:', err);
+        return { success: false, message: `Copy failed: ${err.message}` };
+    }
+});
+
 app.whenReady().then(() => {
     registerLocalResourceProtocol();
     createWindow();

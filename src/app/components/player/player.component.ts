@@ -1,5 +1,6 @@
 import { Component, ViewChild, ElementRef, ChangeDetectorRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 
 interface PlaylistItem {
   name: string;
@@ -12,7 +13,7 @@ interface PlaylistItem {
 @Component({
   selector: 'app-player',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   template: `
     <div class="player-container">
       <!-- Video Element -->
@@ -103,14 +104,46 @@ interface PlaylistItem {
          <div class="sidebar-header">
             <h3>Playlist</h3>
             <div class="header-actions">
+                <button class="icon-btn" (click)="toggleConfig()" title="Settings" [class.active]="isConfigVisible"><span class="material-icons">tune</span></button>
                 <button class="icon-btn" (click)="clearPlaylist()" title="Clear Playlist"><span class="material-icons">delete_sweep</span></button>
                 <button class="icon-btn" (click)="togglePlaylist()"><span class="material-icons">close</span></button>
             </div>
          </div>
+         
+         <div class="config-toolbar" *ngIf="isConfigVisible">
+            <div class="config-item">
+                <span class="config-label">Min Dur:</span>
+                <input type="number" [(ngModel)]="minDuration" min="0" class="config-input" title="Filter videos shorter than X seconds">
+                <span class="config-unit">s</span>
+            </div>
+            <div class="config-item">
+                <span class="config-label">Seek:</span>
+                <input type="number" [(ngModel)]="seekSeconds" min="1" class="config-input" title="Seek interval in seconds">
+                <span class="config-unit">s</span>
+            </div>
+            
+            <div class="config-separator"></div>
+
+            <div class="config-item">
+                <span class="config-label">Dest:</span>
+                <div class="dest-input-group">
+                    <input type="text" [value]="copyDestination" readonly class="config-input dest-input" placeholder="Select folder..." title="{{copyDestination}}">
+                    <button class="icon-btn small" (click)="selectDestination()" title="Select Destination Folder">
+                        <span class="material-icons" style="font-size: 16px;">folder_open</span>
+                    </button>
+                </div>
+            </div>
+            <div class="config-item">
+                <span class="config-label">Depth:</span>
+                <input type="number" [(ngModel)]="copyDepth" min="0" class="config-input" title="Path depth to preserve">
+            </div>
+         </div>
+
          <div class="playlist-items">
             <div *ngFor="let item of playlist; let i = index" 
                  class="playlist-item" 
                  [class.active]="i === activeIndex"
+                 [style.display]="shouldShow(item) ? 'flex' : 'none'"
                  (click)="playFromPlaylist(i)">
                <div class="item-thumbnail">
                   <img [src]="item.thumbnail" *ngIf="item.thumbnail" alt="thumb">
@@ -137,6 +170,9 @@ interface PlaylistItem {
                <button class="add-btn secondary" (click)="openFile()">Add Files</button>
             </div>
          </div>
+      </div>
+      <div class="toast-notification" *ngIf="toastMessage" [class.show]="toastMessage">
+        {{ toastMessage }}
       </div>
     </div>
   `,
@@ -385,6 +421,87 @@ interface PlaylistItem {
         gap: 5px;
     }
 
+    .config-toolbar {
+        padding: 10px 15px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-bottom: 1px solid var(--glass-border);
+        background: rgba(0,0,0,0.2);
+        font-size: 0.8rem;
+    }
+
+    .config-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .config-input {
+        background: rgba(255,255,255,0.1);
+        border: 1px solid var(--glass-border);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        width: 50px;
+        text-align: center;
+    }
+    
+    .config-label, .config-unit {
+        color: var(--text-secondary);
+        font-size: 0.75rem;
+    }
+
+    .config-separator {
+        width: 1px;
+        height: 20px;
+        background: var(--glass-border);
+        margin: 0 5px;
+    }
+
+    .dest-input-group {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .dest-input {
+        width: 120px;
+        text-align: left;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: default;
+    }
+    
+    .icon-btn.small {
+        padding: 4px;
+        width: 24px;
+        height: 24px;
+    }
+
+    .toast-notification {
+        position: absolute;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.85);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: 1px solid var(--glass-border);
+        box-shadow: var(--shadow-premium);
+        font-size: 0.9rem;
+        z-index: 1000;
+        animation: fadeIn 0.3s ease;
+        pointer-events: none;
+    }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translate(-50%, 10px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+    }
+
     .playlist-items {
       flex: 1;
       overflow-y: auto;
@@ -566,6 +683,17 @@ export class PlayerComponent {
   volume = 1;
   isMuted = false;
 
+  // Filter & Config state
+  minDuration = 0;
+  seekSeconds = 10;
+  isConfigVisible = false;
+
+  // Copy state
+  copyDestination = '';
+  copyDepth = 2;
+  toastMessage = '';
+  toastTimeout: any;
+
   // Playlist state
   playlist: PlaylistItem[] = [];
   activeIndex = -1;
@@ -587,6 +715,22 @@ export class PlayerComponent {
     this.serverPort = await (window as any).electronAPI.getServerPort();
   }
 
+  shouldShow(item: PlaylistItem): boolean {
+    if (!this.minDuration) return true;
+    return (item.duration || 0) >= this.minDuration;
+  }
+
+  getNextIndex(currentIndex: number, direction: number): number {
+    let nextIndex = currentIndex + direction;
+    while (nextIndex >= 0 && nextIndex < this.playlist.length) {
+      if (this.shouldShow(this.playlist[nextIndex])) {
+        return nextIndex;
+      }
+      nextIndex += direction;
+    }
+    return -1; // No valid next/prev item
+  }
+
   @HostListener('window:keydown', ['$event'])
   handleKeyboardEvent(event: KeyboardEvent) {
     // Prevent default scrolling for space and arrow keys
@@ -605,14 +749,16 @@ export class PlayerComponent {
         this.forward();
         break;
       case 'ArrowUp':
-        this.volume = Math.min(1, this.volume + 0.1);
-        this.videoElement.nativeElement.volume = this.volume;
-        this.isMuted = false;
+        {
+          const prev = this.getNextIndex(this.activeIndex, -1);
+          if (prev !== -1) this.playFromPlaylist(prev);
+        }
         break;
       case 'ArrowDown':
-        this.volume = Math.max(0, this.volume - 0.1);
-        this.videoElement.nativeElement.volume = this.volume;
-        if (this.volume === 0) this.isMuted = true;
+        {
+          const next = this.getNextIndex(this.activeIndex, 1);
+          if (next !== -1) this.playFromPlaylist(next);
+        }
         break;
       case 'f':
       case 'F':
@@ -629,6 +775,10 @@ export class PlayerComponent {
       case '<':
       case ',':
         this.stepSpeed(-1);
+        break;
+      case 'c':
+      case 'C':
+        this.copyCurrentVideo();
         break;
     }
     this.cdr.detectChanges();
@@ -713,14 +863,21 @@ export class PlayerComponent {
   }
 
   onVideoEnded() {
-    if (this.activeIndex < this.playlist.length - 1) {
-      this.playFromPlaylist(this.activeIndex + 1);
+    const next = this.getNextIndex(this.activeIndex, 1);
+    if (next !== -1) {
+      this.playFromPlaylist(next);
     } else {
       this.isPlaying = false;
     }
   }
 
   onVideoError(event: any) {
+    // Ignore errors if playlist is empty (e.g. when cleared)
+    if (this.playlist.length === 0) {
+      this.errorMessage = '';
+      return;
+    }
+
     const video = this.videoElement.nativeElement;
     if (video.error) {
       console.error('Video Error:', video.error);
@@ -749,12 +906,55 @@ export class PlayerComponent {
     this.currentTime = 0;
     this.progress = 0;
     this.duration = 0;
+    this.errorMessage = ''; // Clear any existing errors
     this.cdr.detectChanges();
   }
 
   toggleSpeedMenu() {
     this.isSpeedMenuVisible = !this.isSpeedMenuVisible;
     if (this.isSpeedMenuVisible) this.isPlaylistVisible = false;
+  }
+
+  toggleConfig() {
+    this.isConfigVisible = !this.isConfigVisible;
+  }
+
+  async selectDestination() {
+    const path = await (window as any).electronAPI.selectDestinationFolder();
+    if (path) {
+      this.copyDestination = path;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async copyCurrentVideo() {
+    if (!this.playlist[this.activeIndex] || !this.copyDestination) {
+      this.showToast('Please select a video and a destination folder first.', true);
+      return;
+    }
+
+    const currentVideo = this.playlist[this.activeIndex];
+    this.showToast('Copying...');
+
+    const result = await (window as any).electronAPI.copyVideoFile(
+      currentVideo.path,
+      this.copyDestination,
+      this.copyDepth
+    );
+
+    this.showToast(result.message, !result.success);
+  }
+
+  showToast(message: string, isError = false) {
+    this.toastMessage = message;
+    // You might want to add a class for error, but for now simple message
+    // If we want error styling, we can add toastIsError state or prefix message
+    if (this.toastTimeout) clearTimeout(this.toastTimeout);
+    this.toastTimeout = setTimeout(() => {
+      this.toastMessage = '';
+      this.cdr.detectChanges();
+    }, 3000);
+    this.cdr.detectChanges();
   }
 
   setPlaybackSpeed(speed: number) {
@@ -794,11 +994,11 @@ export class PlayerComponent {
   }
 
   rewind() {
-    this.videoElement.nativeElement.currentTime -= 10;
+    this.videoElement.nativeElement.currentTime -= this.seekSeconds;
   }
 
   forward() {
-    this.videoElement.nativeElement.currentTime += 10;
+    this.videoElement.nativeElement.currentTime += this.seekSeconds;
   }
 
   toggleMute() {
