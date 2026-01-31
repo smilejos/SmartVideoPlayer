@@ -10,6 +10,9 @@ interface PlaylistItem {
   thumbnail?: string;
   width?: number;
   height?: number;
+  mtime?: number;
+  creation_time?: string;
+  location?: string;
 }
 
 @Component({
@@ -152,6 +155,10 @@ interface PlaylistItem {
             <div class="config-item">
                 <span class="config-label">Depth:</span>
                 <input type="number" [(ngModel)]="copyDepth" (ngModelChange)="saveConfig()" min="0" class="config-input" title="Path depth to preserve">
+            </div>
+            <div class="config-item">
+                <span class="config-label" style="width:auto">Cache Thumbnails:</span>
+                <input type="checkbox" [(ngModel)]="cacheThumbnails" (change)="saveConfig()" title="Save thumbnails to .thumbnails folder in video directory">
             </div>
         </div>
 
@@ -744,10 +751,11 @@ export class PlayerComponent implements OnInit {
   volume = 1;
   isMuted = false;
 
-  // Filter & Config state
+  // Config state
   minDuration = 0;
   seekSeconds = 10;
   isConfigVisible = false;
+  cacheThumbnails = false;
 
   // Copy state
   copyDestination = '';
@@ -781,7 +789,8 @@ export class PlayerComponent implements OnInit {
       minDuration: this.minDuration,
       seekSeconds: this.seekSeconds,
       copyDestination: this.copyDestination,
-      copyDepth: this.copyDepth
+      copyDepth: this.copyDepth,
+      cacheThumbnails: this.cacheThumbnails
     };
     localStorage.setItem('playerConfig', JSON.stringify(config));
   }
@@ -795,6 +804,7 @@ export class PlayerComponent implements OnInit {
         if (config.seekSeconds !== undefined) this.seekSeconds = config.seekSeconds;
         if (config.copyDestination !== undefined) this.copyDestination = config.copyDestination;
         if (config.copyDepth !== undefined) this.copyDepth = config.copyDepth;
+        if (config.cacheThumbnails !== undefined) this.cacheThumbnails = config.cacheThumbnails;
       } catch (e) {
         console.error('Failed to load config', e);
       }
@@ -889,7 +899,7 @@ export class PlayerComponent implements OnInit {
     const filePath = await (window as any).electronAPI.openFile();
     if (filePath) {
       const fileName = filePath.split(/[\\\\/]/).pop();
-      const metadata = await (window as any).electronAPI.getVideoMetadata(filePath);
+      const metadata = await (window as any).electronAPI.getVideoMetadata(filePath, { cacheThumbnails: this.cacheThumbnails });
 
       const newItem: PlaylistItem = {
         name: fileName || 'Unknown Video',
@@ -908,28 +918,93 @@ export class PlayerComponent implements OnInit {
   }
 
   async openFolder() {
-    const files: string[] = await (window as any).electronAPI.openFolder();
-    if (files && files.length > 0) {
-      // Add files immediately to show them in the list
-      const newItems = files.map(file => ({
-        name: file.split(/[\\\\/]/).pop() || 'Unknown',
-        path: file
+    const items = await (window as any).electronAPI.openFolder();
+    if (items && items.length > 0) {
+      // items is now Array<{path, size, mtime}>
+
+      const folderPath = items[0].path.substring(0, items[0].path.lastIndexOf((window as any).electronAPI.isWindows ? '\\' : '/'));
+
+      // 1. Read Cache
+      let metadataCache = new Map<string, PlaylistItem>();
+      if (this.cacheThumbnails) {
+        const cachedData = await (window as any).electronAPI.readMetadataCache(folderPath);
+        if (Array.isArray(cachedData)) {
+          cachedData.forEach((item: PlaylistItem) => {
+            if (item.path) metadataCache.set(item.path, item);
+          });
+        }
+      }
+
+      const newItems: PlaylistItem[] = items.map((item: any) => ({
+        name: item.path.split(/[\\\\/]/).pop(),
+        path: item.path,
+        size: item.size,
+        mtime: item.mtime
       }));
 
-      const startIndex = this.playlist.length;
-      this.playlist = [...this.playlist, ...newItems];
+      // Combine with existing playlist
+      // Check for duplicates
+      const uniqueNewItems = newItems.filter(newItem =>
+        !this.playlist.some(existing => existing.path === newItem.path)
+      );
 
-      if (this.activeIndex === -1) {
+      const startIndex = this.playlist.length;
+      this.playlist = [...this.playlist, ...uniqueNewItems];
+      this.isPlaylistVisible = true;
+
+      // Play the first new item if playlist was empty
+      if (this.activeIndex === -1 && this.playlist.length > 0) {
         this.playFromPlaylist(0);
       }
       this.cdr.detectChanges();
 
       // Fetch metadata in background
-      for (let i = 0; i < newItems.length; i++) {
-        const globalIndex = startIndex + i;
-        const metadata = await (window as any).electronAPI.getVideoMetadata(newItems[i].path);
+      let cacheDirty = false;
+      const processList = uniqueNewItems; // Only process what we just added
+
+      for (let i = 0; i < processList.length; i++) {
+        const item = processList[i];
+        const globalIndex = this.playlist.findIndex(p => p.path === item.path);
+        if (globalIndex === -1) continue;
+
+        // Check Cache
+        let metadata: any = null;
+        if (this.cacheThumbnails) {
+          const cached = metadataCache.get(item.path);
+          // Validate cache (check size and mtime)
+          // Allow small tolerance for mtime (e.g. 100ms) or exact match
+          if (cached && cached.size === item.size) {
+            // If mtime is available in both, check it. Legacy cache might not have mtime.
+            if (!cached.mtime || !item.mtime || Math.abs(cached.mtime - item.mtime) < 1000) {
+              metadata = cached;
+              // console.log('Cache hit for', item.name);
+            }
+          }
+        }
+
+        if (!metadata) {
+          // Cache Miss or Invalid - Fetch fresh
+          metadata = await (window as any).electronAPI.getVideoMetadata(item.path, { cacheThumbnails: this.cacheThumbnails });
+          cacheDirty = true;
+        }
+
+        // Merge metadata (keeping size/mtime from fs if needed, but metadata usually has accurate duration/dims)
         this.playlist[globalIndex] = { ...this.playlist[globalIndex], ...metadata };
-        this.cdr.detectChanges();
+
+        // Force update UI every few items to be responsive
+        if (i % 5 === 0 || i === processList.length - 1) {
+          this.cdr.detectChanges();
+        }
+      }
+
+      // Write Cache Back
+      if (this.cacheThumbnails && cacheDirty) {
+        // We can write the entire playlist metadata to the cache file of this folder
+        // Filter playlist to only items in this folder to avoid mixing? 
+        // For now, assuming user opens one folder. 
+        // Better: Only write entries that belong to this folderPath.
+        const folderItems = this.playlist.filter(p => p.path.startsWith(folderPath));
+        (window as any).electronAPI.writeMetadataCache(folderPath, folderItems);
       }
     }
   }

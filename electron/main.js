@@ -247,7 +247,20 @@ ipcMain.handle('open-folder', async () => {
             const videoExtensions = ['.mp4', '.mkv', '.avi', '.webm', '.mov'];
             const videoFiles = files
                 .filter(file => videoExtensions.includes(path.extname(file).toLowerCase()))
-                .map(file => path.join(folderPath, file));
+                .map(file => {
+                    const fullPath = path.join(folderPath, file);
+                    try {
+                        const stats = fs.statSync(fullPath);
+                        return {
+                            path: fullPath,
+                            size: stats.size,
+                            mtime: stats.mtimeMs
+                        };
+                    } catch (e) {
+                        return null;
+                    }
+                })
+                .filter(item => item !== null); // Remove failed stats
             return videoFiles;
         } catch (err) {
             console.error('Error reading directory:', err);
@@ -257,7 +270,7 @@ ipcMain.handle('open-folder', async () => {
     return [];
 });
 
-ipcMain.handle('get-video-metadata', async (event, filePath) => {
+ipcMain.handle('get-video-metadata', async (event, filePath, options = {}) => {
     return new Promise((resolve) => {
         try {
             log(`Getting metadata for: ${filePath}`);
@@ -289,7 +302,7 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                 let width = videoStream ? videoStream.width : 0;
                 let height = videoStream ? videoStream.height : 0;
 
-                // Handle rotation (e.g. phone videos)
+                // Video rotation logic
                 if (videoStream && videoStream.tags && videoStream.tags.rotate) {
                     const rotate = Math.abs(parseInt(videoStream.tags.rotate));
                     if (rotate === 90 || rotate === 270) {
@@ -298,16 +311,43 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                     }
                 }
 
+                // Extract extended metadata
+                const tags = metadata.format.tags || {};
+                const streamTags = videoStream ? videoStream.tags : {};
 
-                // Generate thumbnail
-                // We'll capture a frame at 10% or 5 seconds, whichever is smaller/valid, or just 1s
-                const screenshotsFolder = path.join(app.getPath('userData'), 'thumbnails');
+                const creation_time = tags.creation_time || streamTags.creation_time || '';
+                const location = tags.location || tags['location-eng'] || streamTags.location || '';
+
+
+                // Determine thumbnail folder
+                let screenshotsFolder;
+                if (options && options.cacheThumbnails) {
+                    // Cache enabled: save in .thumbnails folder next to video
+                    screenshotsFolder = path.join(path.dirname(filePath), '.thumbnails');
+                } else {
+                    // Cache disabled: save in app data temp folder
+                    screenshotsFolder = path.join(app.getPath('userData'), 'thumbnails');
+                }
+
                 if (!fs.existsSync(screenshotsFolder)) {
                     fs.mkdirSync(screenshotsFolder, { recursive: true });
                 }
 
-                const filename = `thumb_${path.basename(filePath)}_${Date.now()}.png`;
+                const filename = `thumb_${path.basename(filePath)}.png`;
                 const thumbnailPath = path.join(screenshotsFolder, filename);
+
+                // Optimization: Check if thumbnail already exists
+                if (fs.existsSync(thumbnailPath)) {
+                    log('Thumbnail exists, reading from cache...');
+                    try {
+                        const imageBuffer = fs.readFileSync(thumbnailPath);
+                        const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
+                        resolve({ duration, size, thumbnail: base64Image, width, height, creation_time, location });
+                        return;
+                    } catch (e) {
+                        log('Error reading existing thumbnail, regenerating: ' + e.message);
+                    }
+                }
 
                 log('Generating thumbnail...');
                 ffmpeg(filePath)
@@ -317,21 +357,25 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                         try {
                             const imageBuffer = fs.readFileSync(thumbnailPath);
                             const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
-                            // Clean up temp file
-                            fs.unlink(thumbnailPath, (err) => {
-                                if (err) console.error("Error deleting temp thumbnail", err)
-                            });
-                            resolve({ duration, size, thumbnail: base64Image, width, height });
+
+                            // Only delete if NOT using persistent cache
+                            if (!options || !options.cacheThumbnails) {
+                                fs.unlink(thumbnailPath, (err) => {
+                                    if (err) console.error("Error deleting temp thumbnail", err)
+                                });
+                            }
+
+                            resolve({ duration, size, thumbnail: base64Image, width, height, creation_time, location });
                         } catch (e) {
                             log('Error reading thumbnail: ' + e.message);
                             console.error('Error reading thumbnail:', e);
-                            resolve({ duration, size, thumbnail: null, width, height });
+                            resolve({ duration, size, thumbnail: null, width, height, creation_time, location });
                         }
                     })
                     .on('error', (err) => {
                         log('Thumbnail generation error: ' + err.message);
                         console.error('Thumbnail generation error:', err);
-                        resolve({ duration, size, thumbnail: null });
+                        resolve({ duration, size, thumbnail: null, width, height, creation_time, location });
                     })
                     .screenshots({
                         count: 1,
@@ -410,6 +454,36 @@ ipcMain.handle('copy-video-file', async (event, { filePath, destinationFolder, p
     } catch (err) {
         console.error('Copy error:', err);
         return { success: false, message: `Copy failed: ${err.message}` };
+    }
+});
+
+// Metadata Cache IPC
+ipcMain.handle('read-metadata-cache', async (event, folderPath) => {
+    try {
+        const cachePath = path.join(folderPath, '.thumbnails', 'metadata.json');
+        if (fs.existsSync(cachePath)) {
+            const data = fs.readFileSync(cachePath, 'utf8');
+            return JSON.parse(data);
+        }
+        return [];
+    } catch (error) {
+        console.error('Error reading metadata cache:', error);
+        return [];
+    }
+});
+
+ipcMain.handle('write-metadata-cache', async (event, folderPath, data) => {
+    try {
+        const thumbDir = path.join(folderPath, '.thumbnails');
+        if (!fs.existsSync(thumbDir)) {
+            fs.mkdirSync(thumbDir, { recursive: true });
+        }
+        const cachePath = path.join(thumbDir, 'metadata.json');
+        fs.writeFileSync(cachePath, JSON.stringify(data, null, 2), 'utf8');
+        return true;
+    } catch (error) {
+        console.error('Error writing metadata cache:', error);
+        return false;
     }
 });
 
