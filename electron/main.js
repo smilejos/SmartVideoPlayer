@@ -277,6 +277,10 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                     return;
                 }
 
+                // Log full metadata for debugging/user inspection
+                log('FFprobe Full Metadata:');
+                log(JSON.stringify(metadata, null, 2));
+
                 log('FFprobe success. Duration: ' + (metadata.format.duration || 0));
 
                 const duration = metadata.format.duration || 0;
@@ -320,7 +324,7 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                         folder: screenshotsFolder,
                         filename: filename,
                         timemarks: ['5%'], // Capture at 5% of video
-                        size: '320x180'
+                        size: '320x?'
                     });
             });
         } catch (error) {
@@ -358,26 +362,30 @@ ipcMain.handle('copy-video-file', async (event, { filePath, destinationFolder, p
         const sourceDir = path.dirname(filePath);
         const fileName = path.basename(filePath);
         // Split by separator. On Windows it might be different, but path.sep handles system specific.
-        // However, input paths might be mixed if coming from different sources, but usually consistent in Node.
-        // split(path.sep) usually works.
         const pathSegments = sourceDir.split(path.sep);
 
-        // Remove empty strings resulting from root split (e.g. /var/... -> ['', 'var', ...])
+        // Remove empty strings resulting from root split
         const cleanSegments = pathSegments.filter(s => s.length > 0);
 
         const effectiveDepth = Math.min(Math.max(0, pathDepth), cleanSegments.length);
         const segmentsToKeep = cleanSegments.slice(cleanSegments.length - effectiveDepth);
 
-        const targetDir = path.join(destinationFolder, ...segmentsToKeep);
-        const targetPath = path.join(targetDir, fileName);
-
-        if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true });
+        // Construct new filename: 202601-down_xxxx.mp4
+        let newFileName = fileName;
+        if (segmentsToKeep.length > 0) {
+            const prefix = segmentsToKeep.join('');
+            newFileName = `${prefix}-${fileName}`;
         }
+
+        const targetPath = path.join(destinationFolder, newFileName);
+
+        // Check if file exists, maybe duplicate? For now just overwrite or error?
+        // User didn't specify, standard copy overwrites usually or we can check.
+        // fs.copyFileSync overwrites by default.
 
         fs.copyFileSync(filePath, targetPath);
 
-        return { success: true, message: `Copied to ${segmentsToKeep.join('/')}/${fileName}` };
+        return { success: true, message: `Copied to ${newFileName}` };
     } catch (err) {
         console.error('Copy error:', err);
         return { success: false, message: `Copy failed: ${err.message}` };
