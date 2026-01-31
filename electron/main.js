@@ -286,8 +286,17 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                 const duration = metadata.format.duration || 0;
                 // Try to get video stream dimensions
                 const videoStream = metadata.streams.find(s => s.codec_type === 'video');
-                const width = videoStream ? videoStream.width : 0;
-                const height = videoStream ? videoStream.height : 0;
+                let width = videoStream ? videoStream.width : 0;
+                let height = videoStream ? videoStream.height : 0;
+
+                // Handle rotation (e.g. phone videos)
+                if (videoStream && videoStream.tags && videoStream.tags.rotate) {
+                    const rotate = Math.abs(parseInt(videoStream.tags.rotate));
+                    if (rotate === 90 || rotate === 270) {
+                        // Swap width and height
+                        [width, height] = [height, width];
+                    }
+                }
 
 
                 // Generate thumbnail
