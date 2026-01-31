@@ -284,6 +284,11 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                 log('FFprobe success. Duration: ' + (metadata.format.duration || 0));
 
                 const duration = metadata.format.duration || 0;
+                // Try to get video stream dimensions
+                const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+                const width = videoStream ? videoStream.width : 0;
+                const height = videoStream ? videoStream.height : 0;
+
 
                 // Generate thumbnail
                 // We'll capture a frame at 10% or 5 seconds, whichever is smaller/valid, or just 1s
@@ -307,11 +312,11 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                             fs.unlink(thumbnailPath, (err) => {
                                 if (err) console.error("Error deleting temp thumbnail", err)
                             });
-                            resolve({ duration, size, thumbnail: base64Image });
+                            resolve({ duration, size, thumbnail: base64Image, width, height });
                         } catch (e) {
                             log('Error reading thumbnail: ' + e.message);
                             console.error('Error reading thumbnail:', e);
-                            resolve({ duration, size, thumbnail: null });
+                            resolve({ duration, size, thumbnail: null, width, height });
                         }
                     })
                     .on('error', (err) => {
@@ -350,7 +355,7 @@ ipcMain.handle('select-destination-folder', async () => {
     return null;
 });
 
-ipcMain.handle('copy-video-file', async (event, { filePath, destinationFolder, pathDepth }) => {
+ipcMain.handle('copy-video-file', async (event, { filePath, destinationFolder, pathDepth, orientation }) => {
     try {
         if (!fs.existsSync(filePath)) {
             return { success: false, message: 'Source file not found' };
@@ -370,12 +375,19 @@ ipcMain.handle('copy-video-file', async (event, { filePath, destinationFolder, p
         const effectiveDepth = Math.min(Math.max(0, pathDepth), cleanSegments.length);
         const segmentsToKeep = cleanSegments.slice(cleanSegments.length - effectiveDepth);
 
-        // Construct new filename: 202601-down_xxxx.mp4
+        // Construct new filename: 202601-V-down_xxxx.mp4
+        // Logic: Prefix (if any) + Orientation (if any) + Filename
         let newFileName = fileName;
-        if (segmentsToKeep.length > 0) {
-            const prefix = segmentsToKeep.join('');
-            newFileName = `${prefix}-${fileName}`;
-        }
+        const prefix = segmentsToKeep.length > 0 ? segmentsToKeep.join('') : '';
+        const tag = orientation ? orientation : ''; // Expect 'V' or 'H'
+
+        // Build parts list
+        const parts = [];
+        if (prefix) parts.push(prefix);
+        if (tag) parts.push(tag);
+        parts.push(fileName);
+
+        newFileName = parts.join('-');
 
         const targetPath = path.join(destinationFolder, newFileName);
 

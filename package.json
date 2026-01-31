@@ -1,5 +1,5 @@
 {
-    "name": "videoplayer",
+    "name": "SmartVideoPlayer",
     "version": "0.0.0",
     "main": "electron/main.js",
     "scripts": {

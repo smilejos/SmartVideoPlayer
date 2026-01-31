@@ -8,6 +8,8 @@ interface PlaylistItem {
   duration?: number;
   size?: number;
   thumbnail?: string;
+  width?: number;
+  height?: number;
 }
 
 @Component({
@@ -1020,10 +1022,17 @@ export class PlayerComponent implements OnInit {
     const currentVideo = this.playlist[this.activeIndex];
     this.showToast('Copying...');
 
+    // Determine orientation
+    let orientation = '';
+    if (currentVideo.width && currentVideo.height) {
+      orientation = currentVideo.width >= currentVideo.height ? 'H' : 'V';
+    }
+
     const result = await (window as any).electronAPI.copyVideoFile(
       currentVideo.path,
       this.copyDestination,
-      this.copyDepth
+      this.copyDepth,
+      orientation
     );
 
     this.showToast(result.message, !result.success);
