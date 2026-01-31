@@ -152,6 +152,7 @@ interface PlaylistItem {
 
         <div class="playlist-items">
           <div *ngFor="let item of playlist; let i = index" 
+               [id]="'playlist-item-' + i"
                class="playlist-item" 
                [class.active]="i === activeIndex"
                [style.display]="shouldShow(item) ? 'flex' : 'none'"
@@ -932,6 +933,16 @@ export class PlayerComponent implements OnInit {
     video.play().catch(e => console.error("Play error", e));
     this.isPlaying = true;
     this.cdr.detectChanges();
+    this.scrollToActive();
+  }
+
+  scrollToActive() {
+    setTimeout(() => {
+      const element = document.getElementById(`playlist-item-${this.activeIndex}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 50); // Small delay to ensure DOM is updated
   }
 
   onVideoEnded() {
