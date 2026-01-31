@@ -5,9 +5,68 @@ const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const ffmpeg = require('fluent-ffmpeg');
+const logFile = path.join(app.getPath('desktop'), 'vp_debug.log');
 
-// Detect ffmpeg path (assuming it's in PATH, otherwise set explicitly)
-ffmpeg.setFfmpegPath('ffmpeg');
+function log(message) {
+    try {
+        const timestamp = new Date().toISOString();
+        const logMessage = `${timestamp}: ${message}\n`;
+        fs.appendFileSync(logFile, logMessage);
+    } catch (e) {
+        console.error("Logging failed:", e);
+    }
+}
+
+// Global error handler
+process.on('uncaughtException', (error) => {
+    log(`Uncaught Exception: ${error.stack}`);
+    dialog.showErrorBox('Uncaught Exception', error.stack);
+});
+
+// Detect environment
+const isPackaged = app.isPackaged;
+
+// Determine paths for ffmpeg/ffprobe binaries
+let ffmpegPath;
+let ffprobePath;
+
+try {
+    log('Starting App');
+    log('isPackaged: ' + isPackaged);
+
+    if (!isPackaged) {
+        ffmpegPath = require('ffmpeg-static');
+        ffprobePath = require('ffprobe-static').path;
+    } else {
+        // In production, binaries are unpacked to resources folder
+        ffmpegPath = path.join(process.resourcesPath, 'ffmpeg');
+        ffprobePath = path.join(process.resourcesPath, 'ffprobe');
+    }
+
+
+
+    if (typeof ffmpegPath !== 'string') {
+        log('ffmpegPath is not a string: ' + typeof ffmpegPath);
+    }
+    log('ffmpegPath: ' + ffmpegPath);
+
+    try {
+        log('ffmpegPath Exists: ' + fs.existsSync(ffmpegPath));
+    } catch (e) { log('Error checking ffmpeg existence: ' + e.message); }
+
+    log('ffprobePath: ' + ffprobePath);
+
+    try {
+        log('ffprobePath Exists: ' + fs.existsSync(ffprobePath));
+    } catch (e) { log('Error checking ffprobe existence: ' + e.message); }
+
+    ffmpeg.setFfmpegPath(ffmpegPath);
+    ffmpeg.setFfprobePath(ffprobePath);
+} catch (err) {
+    const msg = err.stack || err.message;
+    log('Startup Error: ' + msg);
+    dialog.showErrorBox('Startup Error', msg);
+}
 
 // Setup Express Server
 const server = express();
@@ -201,17 +260,24 @@ ipcMain.handle('open-folder', async () => {
 ipcMain.handle('get-video-metadata', async (event, filePath) => {
     return new Promise((resolve) => {
         try {
+            log(`Getting metadata for: ${filePath}`);
+
             // Get file size
             const stat = fs.statSync(filePath);
             const size = stat.size;
+            log(`File size: ${size}`);
 
             // Get metadata and thumbnail
+            log('Calling ffprobe...');
             ffmpeg.ffprobe(filePath, (err, metadata) => {
                 if (err) {
+                    log(`FFprobe error for ${filePath}: ${err.message}`);
                     console.error('FFprobe error:', err);
                     resolve({ duration: 0, size, thumbnail: null });
                     return;
                 }
+
+                log('FFprobe success. Duration: ' + (metadata.format.duration || 0));
 
                 const duration = metadata.format.duration || 0;
 
@@ -225,8 +291,10 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                 const filename = `thumb_${path.basename(filePath)}_${Date.now()}.png`;
                 const thumbnailPath = path.join(screenshotsFolder, filename);
 
+                log('Generating thumbnail...');
                 ffmpeg(filePath)
                     .on('end', () => {
+                        log('Thumbnail generated');
                         // Read the file and convert to base64
                         try {
                             const imageBuffer = fs.readFileSync(thumbnailPath);
@@ -237,11 +305,13 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                             });
                             resolve({ duration, size, thumbnail: base64Image });
                         } catch (e) {
+                            log('Error reading thumbnail: ' + e.message);
                             console.error('Error reading thumbnail:', e);
                             resolve({ duration, size, thumbnail: null });
                         }
                     })
                     .on('error', (err) => {
+                        log('Thumbnail generation error: ' + err.message);
                         console.error('Thumbnail generation error:', err);
                         resolve({ duration, size, thumbnail: null });
                     })
@@ -254,6 +324,7 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
                     });
             });
         } catch (error) {
+            log(`Error getting metadata main catch: ${error.message}`);
             console.error('Error getting metadata:', error);
             resolve({ duration: 0, size: 0, thumbnail: null });
         }
