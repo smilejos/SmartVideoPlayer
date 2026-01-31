@@ -18,6 +18,9 @@ interface PlaylistItem {
   imports: [CommonModule, FormsModule],
   template: `
     <div class="player-container">
+      <!-- Drag Handle for Electron Window -->
+      <div class="drag-handle"></div>
+
       <!-- Video Element -->
       <video #videoPlayer class="video-element"
         (click)="togglePlay()"
@@ -216,6 +219,17 @@ interface PlaylistItem {
       height: 100%;
       object-fit: contain;
       background: black;
+    }
+
+    /* Drag Handle */
+    .drag-handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 32px; /* Standard macOS title bar height */
+      z-index: 1000;
+      -webkit-app-region: drag;
     }
 
     /* Controls Overlay */
