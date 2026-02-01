@@ -460,10 +460,31 @@ ipcMain.handle('copy-video-file', async (event, { filePath, destinationFolder, p
 // Metadata Cache IPC
 ipcMain.handle('read-metadata-cache', async (event, folderPath) => {
     try {
-        const cachePath = path.join(folderPath, '.thumbnails', 'metadata.json');
+        const thumbDir = path.join(folderPath, '.thumbnails');
+        const cachePath = path.join(thumbDir, 'metadata.json');
+
         if (fs.existsSync(cachePath)) {
             const data = fs.readFileSync(cachePath, 'utf8');
-            return JSON.parse(data);
+            let items = JSON.parse(data);
+
+            // Re-hydrate thumbnails from files
+            items = items.map(item => {
+                if (!item.path) return item;
+                const filename = `thumb_${path.basename(item.path)}.png`;
+                const thumbPath = path.join(thumbDir, filename);
+
+                if (fs.existsSync(thumbPath)) {
+                    try {
+                        const imageBuffer = fs.readFileSync(thumbPath);
+                        item.thumbnail = `data:image/png;base64,${imageBuffer.toString('base64')}`;
+                    } catch (e) {
+                        // Failed to read thumb
+                    }
+                }
+                return item;
+            });
+
+            return items;
         }
         return [];
     } catch (error) {
@@ -478,8 +499,15 @@ ipcMain.handle('write-metadata-cache', async (event, folderPath, data) => {
         if (!fs.existsSync(thumbDir)) {
             fs.mkdirSync(thumbDir, { recursive: true });
         }
+
+        // Optimize: Exclude base64 thumbnail from JSON
+        const optimizedData = data.map(item => {
+            const { thumbnail, ...cleanItem } = item;
+            return cleanItem;
+        });
+
         const cachePath = path.join(thumbDir, 'metadata.json');
-        fs.writeFileSync(cachePath, JSON.stringify(data, null, 2), 'utf8');
+        fs.writeFileSync(cachePath, JSON.stringify(optimizedData, null, 2), 'utf8');
         return true;
     } catch (error) {
         console.error('Error writing metadata cache:', error);
