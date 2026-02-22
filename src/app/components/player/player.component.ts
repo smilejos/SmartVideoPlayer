@@ -21,7 +21,8 @@ interface PlaylistItem {
   imports: [CommonModule, FormsModule],
   template: `
     <div class="player-container">
-      <!-- Drag Handle for Electron Window -->
+      <div class="main-video-area" [class.playlist-open]="isPlaylistVisible">
+        <!-- Drag Handle for Electron Window -->
       <div class="drag-handle"></div>
 
       <!-- Video Element -->
@@ -110,6 +111,7 @@ interface PlaylistItem {
             </button>
           </div>
         </div>
+      </div>
       </div>
 
       <!-- Sliding Playlist Sidebar -->
@@ -214,18 +216,32 @@ interface PlaylistItem {
       position: relative;
       width: 100%;
       height: 100%;
+      overflow: hidden;
+      cursor: default;
+    }
+
+    .main-video-area {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       display: flex;
       align-items: center;
       justify-content: center;
+      background: black;
       overflow: hidden;
-      cursor: default;
+    }
+
+    .main-video-area.playlist-open {
+      right: 320px;
     }
 
     .video-element {
       width: 100%;
       height: 100%;
       object-fit: contain;
-      background: black;
     }
 
     /* Drag Handle */
